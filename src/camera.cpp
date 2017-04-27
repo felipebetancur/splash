@@ -87,7 +87,7 @@ void Camera::init()
     glGetError();
     glCreateFramebuffers(1, &_fbo);
 
-    setupFBO();
+    setOutputNbr(1);
 
     GLenum _status = glCheckNamedFramebufferStatus(_fbo, GL_DRAW_FRAMEBUFFER);
     if (_status != GL_FRAMEBUFFER_COMPLETE)
@@ -180,7 +180,7 @@ void Camera::computeVertexVisibility()
 
     // Update the vertices visibility based on the result
     glActiveTexture(GL_TEXTURE0);
-    _outTexture->bind();
+    _outTextures[0]->bind();
     primitiveIdShift = 0;
     for (auto& o : _objects)
     {
@@ -191,7 +191,7 @@ void Camera::computeVertexVisibility()
         obj->transferVisibilityFromTexToAttr(_width, _height, primitiveIdShift);
         primitiveIdShift += obj->getVerticesNumber() / 3;
     }
-    _outTexture->unbind();
+    _outTextures[0]->unbind();
 }
 
 /*************/
@@ -584,11 +584,11 @@ void Camera::render()
         _newHeight = 0;
     }
 
-    ImageBufferSpec spec = _outTexture->getSpec();
+    ImageBufferSpec spec = _outTextures[0]->getSpec();
     if (spec.width != _width || spec.height != _height)
         setOutputSize(spec.width, spec.height);
 
-    if (!_outTexture)
+    if (_outTextures.size() < 1)
         return;
 
 #ifdef DEBUG
@@ -898,40 +898,61 @@ bool Camera::setCalibrationPoint(const Values& screenPoint)
 }
 
 /*************/
-void Camera::setupFBO()
+void Camera::setOutputNbr(int nbr)
 {
+    if (nbr < 1 || nbr == _outTextures.size())
+        return;
+
     if (!_depthTexture)
     {
         _depthTexture = make_shared<Texture_Image>(_root, 512, 512, "D", nullptr);
         glNamedFramebufferTexture(_fbo, GL_DEPTH_ATTACHMENT, _depthTexture->getTexId(), 0);
     }
 
-    if (!_outTexture)
+    if (nbr < _outTextures.size())
     {
-        _outTexture = make_shared<Texture_Image>(_root);
-        _outTexture->setAttribute("clampToEdge", {1});
-        _outTexture->setAttribute("filtering", {0});
-        _outTexture->reset(512, 512, "RGBA", nullptr);
-        glNamedFramebufferTexture(_fbo, GL_COLOR_ATTACHMENT0, _outTexture->getTexId(), 0);
+        for (int i = nbr; i < _outTextures.size(); ++i)
+            glNamedFramebufferTexture(_fbo, GL_COLOR_ATTACHMENT0 + i, 0, 0);
+
+        _outTextures.resize(nbr);
+    }
+    else
+    {
+        for (int i = _outTextures.size(); i < nbr; ++i)
+        {
+            auto texture = make_shared<Texture_Image>(_root);
+            texture->setAttribute("clampToEdge", {1});
+            texture->setAttribute("filtering", {0});
+            texture->reset(512, 512, "RGBA", nullptr);
+            glNamedFramebufferTexture(_fbo, GL_COLOR_ATTACHMENT0 + i, texture->getTexId(), 0);
+            _outTextures.push_back(texture);
+        }
     }
 
-    GLenum fboBuffers[1] = {GL_COLOR_ATTACHMENT0};
-    glNamedFramebufferDrawBuffers(_fbo, 1, fboBuffers);
+    GLenum fboBuffers[_outTextures.size()];
+    for (int i = 0; i < _outTextures.size(); ++i)
+        fboBuffers[i] = GL_COLOR_ATTACHMENT0 + i;
+    glNamedFramebufferDrawBuffers(_fbo, _outTextures.size(), fboBuffers);
 }
 
 /*************/
 void Camera::updateColorDepth()
 {
-    auto spec = _outTexture->getSpec();
+    for (int i = 0; i < _outTextures.size(); ++i)
+    {
+        auto spec = _outTextures[i]->getSpec();
+        glNamedFramebufferTexture(_fbo, GL_COLOR_ATTACHMENT0 + i, 0, 0);
+        if (_render16bits)
+            _outTextures[i]->reset(spec.width, spec.height, "RGBA16", nullptr);
+        else
+            _outTextures[i]->reset(spec.width, spec.height, "RGBA", nullptr);
+        glNamedFramebufferTexture(_fbo, GL_COLOR_ATTACHMENT0 + i, _outTextures[i]->getTexId(), 0);
+    }
 
-    if (_render16bits)
-        _outTexture->reset(spec.width, spec.height, "RGBA16", nullptr);
-    else
-        _outTexture->reset(spec.width, spec.height, "RGBA", nullptr);
-    glNamedFramebufferTexture(_fbo, GL_COLOR_ATTACHMENT0, _outTexture->getTexId(), 0);
-
-    GLenum fboBuffers[1] = {GL_COLOR_ATTACHMENT0};
-    glNamedFramebufferDrawBuffers(_fbo, 1, fboBuffers);
+    GLenum fboBuffers[_outTextures.size()];
+    for (int i = 0; i < _outTextures.size(); ++i)
+        fboBuffers[i] = GL_COLOR_ATTACHMENT0 + i;
+    glNamedFramebufferDrawBuffers(_fbo, _outTextures.size(), fboBuffers);
 
     _updateColorDepth = false;
 }
@@ -945,12 +966,13 @@ void Camera::setOutputSize(int width, int height)
     _depthTexture->setResizable(1);
     _depthTexture->setAttribute("size", {width, height});
     _depthTexture->setResizable(_automaticResize);
-    glNamedFramebufferTexture(_fbo, GL_DEPTH_ATTACHMENT, _depthTexture->getTexId(), 0);
 
-    _outTexture->setResizable(1);
-    _outTexture->setAttribute("size", {width, height});
-    _outTexture->setResizable(_automaticResize);
-    glNamedFramebufferTexture(_fbo, GL_COLOR_ATTACHMENT0, _outTexture->getTexId(), 0);
+    for (auto tex : _outTextures)
+    {
+        tex->setResizable(1);
+        tex->setAttribute("size", {width, height});
+        tex->setResizable(_automaticResize);
+    }
 
     _width = width;
     _height = height;

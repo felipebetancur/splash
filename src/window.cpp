@@ -68,6 +68,19 @@ Window::Window(RootObject* root)
     // Get the default window size and position
     glfwGetWindowPos(_window->get(), &_windowRect[0], &_windowRect[1]);
     glfwGetFramebufferSize(_window->get(), &_windowRect[2], &_windowRect[3]);
+
+    // Create the render FBO
+    glCreateFramebuffers(1, &_renderFbo);
+    setupRenderFBO();
+
+    GLenum _status = glCheckNamedFramebufferStatus(_renderFbo, GL_FRAMEBUFFER);
+    if (_status != GL_FRAMEBUFFER_COMPLETE)
+        Log::get() << Log::WARNING << "Window::" << __FUNCTION__ << " - Error while initializing render framebuffer object: " << _status << Log::endl;
+    else
+        Log::get() << Log::MESSAGE << "Window::" << __FUNCTION__ << " - Render framebuffer object successfully initialized" << Log::endl;
+
+    // And the read framebuffer
+    setupReadFBO();
 }
 
 /*************/
@@ -269,7 +282,8 @@ void Window::unlinkFrom(const shared_ptr<BaseObject>& obj)
         _root->disposeObject(warpName);
 
         auto cam = dynamic_pointer_cast<Camera>(obj);
-        unsetTexture(cam->getTexture());
+        for (auto& tex : cam->getTextures())
+            unsetTexture(tex);
     }
     else if (dynamic_pointer_cast<Gui>(obj).get() != nullptr)
     {
@@ -287,23 +301,10 @@ void Window::unlinkFrom(const shared_ptr<BaseObject>& obj)
 /*************/
 void Window::render()
 {
-    // Get the current window size
-    int w, h;
-    glfwGetFramebufferSize(_window->get(), &w, &h);
-    if (w != _windowRect[2] || h != _windowRect[3])
-    {
-        _resized = true;
-        _windowRect[2] = w;
-        _windowRect[3] = h;
-    }
-
     // Update the FBO configuration if needed
-    if (_resized)
-    {
-        setupFBOs();
-        _resized = false;
-    }
+    setupRenderFBO();
 
+    int w, h;
     glfwGetFramebufferSize(_window->get(), &w, &h);
     glViewport(0, 0, w, h);
 
@@ -390,48 +391,60 @@ void Window::render()
 }
 
 /*************/
-void Window::setupFBOs()
+void Window::setupRenderFBO()
 {
-    // Render FBO
-    if (glIsFramebuffer(_renderFbo) == GL_FALSE)
-        glCreateFramebuffers(1, &_renderFbo);
+    glfwGetFramebufferSize(_window->get(), &_windowRect[2], &_windowRect[3]);
 
-    glNamedFramebufferTexture(_renderFbo, GL_DEPTH_ATTACHMENT, 0, 0);
-    _depthTexture = make_shared<Texture_Image>(_root, _windowRect[2], _windowRect[3], "D", nullptr);
-    glNamedFramebufferTexture(_renderFbo, GL_DEPTH_ATTACHMENT, _depthTexture->getTexId(), 0);
+    if (!_depthTexture)
+    {
+        _depthTexture = make_shared<Texture_Image>(_root, 512, 512, "D", nullptr);
+        glNamedFramebufferTexture(_renderFbo, GL_DEPTH_ATTACHMENT, _depthTexture->getTexId(), 0);
+    }
+    else
+    {
+        _depthTexture->setResizable(1);
+        _depthTexture->setAttribute("size", {_windowRect[2], _windowRect[3]});
+        _depthTexture->setResizable(0);
+    }
 
-    glNamedFramebufferTexture(_renderFbo, GL_COLOR_ATTACHMENT0, 0, 0);
-    _colorTexture = make_shared<Texture_Image>(_root);
-    _colorTexture->setAttribute("filtering", {0});
-    _colorTexture->reset(_windowRect[2], _windowRect[3], "sRGBA", nullptr);
-    glNamedFramebufferTexture(_renderFbo, GL_COLOR_ATTACHMENT0, _colorTexture->getTexId(), 0);
+    if (!_colorTexture)
+    {
+        _colorTexture = make_shared<Texture_Image>(_root);
+        _colorTexture->setAttribute("filtering", {0});
+        _colorTexture->reset(_windowRect[2], _windowRect[3], "sRGBA", nullptr);
+        glNamedFramebufferTexture(_renderFbo, GL_COLOR_ATTACHMENT0, _colorTexture->getTexId(), 0);
+    }
+    else
+    {
+        _colorTexture->setResizable(1);
+        _colorTexture->setAttribute("size", {_windowRect[2], _windowRect[3]});
+        _colorTexture->setResizable(0);
+    }
 
     GLenum fboBuffers[1] = {GL_COLOR_ATTACHMENT0};
     glNamedFramebufferDrawBuffers(_renderFbo, 1, fboBuffers);
 
-    GLenum _status = glCheckNamedFramebufferStatus(_renderFbo, GL_FRAMEBUFFER);
-    if (_status != GL_FRAMEBUFFER_COMPLETE)
-        Log::get() << Log::WARNING << "Window::" << __FUNCTION__ << " - Error while initializing render framebuffer object: " << _status << Log::endl;
-    else
-        Log::get() << Log::DEBUGGING << "Window::" << __FUNCTION__ << " - Render framebuffer object successfully initialized" << Log::endl;
-
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, _renderFbo);
     glClearColor(0.0, 0.0, 0.0, 0.0);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
-    glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+}
 
-    // Read FBO
+/*************/
+void Window::setupReadFBO()
+{
+    _window->setAsCurrentContext();
+
     if (_readFbo != 0)
         glDeleteFramebuffers(1, &_readFbo);
 
     glCreateFramebuffers(1, &_readFbo);
 
     glNamedFramebufferTexture(_readFbo, GL_COLOR_ATTACHMENT0, _colorTexture->getTexId(), 0);
-    _status = glCheckNamedFramebufferStatus(_readFbo, GL_FRAMEBUFFER);
+    GLenum _status = glCheckNamedFramebufferStatus(_readFbo, GL_FRAMEBUFFER);
     if (_status != GL_FRAMEBUFFER_COMPLETE)
         Log::get() << Log::WARNING << "Window::" << __FUNCTION__ << " - Error while initializing read framebuffer object: " << _status << Log::endl;
     else
-        Log::get() << Log::DEBUGGING << "Window::" << __FUNCTION__ << " - Read framebuffer object successfully initialized" << Log::endl;
+        Log::get() << Log::MESSAGE << "Window::" << __FUNCTION__ << " - Read framebuffer object successfully initialized" << Log::endl;
+    _window->releaseContext();
 }
 
 /*************/
@@ -521,7 +534,7 @@ bool Window::switchFullscreen(int screenId)
 
     _window = move(make_shared<GlWindow>(window, _window->getMainWindow()));
     updateSwapInterval();
-    _resized = true;
+    setupReadFBO();
 
     setEventsCallbacks();
     showCursor(false);
@@ -697,7 +710,8 @@ void Window::setWindowDecoration(bool hasDecoration)
 
     _window = move(make_shared<GlWindow>(window, _window->getMainWindow()));
     updateSwapInterval();
-    _resized = true;
+    setupRenderFBO();
+    setupReadFBO();
 
     setEventsCallbacks();
     showCursor(false);
@@ -815,7 +829,6 @@ void Window::registerAttributes()
         [&](const Values& args) {
             _windowRect[2] = args[0].as<int>();
             _windowRect[3] = args[1].as<int>();
-            _resized = true;
             updateWindowShape();
             return true;
         },

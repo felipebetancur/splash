@@ -30,7 +30,21 @@ void Filter::init()
         return;
 
     // Intialize FBO, textures and everything OpenGL
+    glGetError();
+    glCreateFramebuffers(1, &_fbo);
+
     setOutput();
+
+    GLenum _status = glCheckNamedFramebufferStatus(_fbo, GL_FRAMEBUFFER);
+    if (_status != GL_FRAMEBUFFER_COMPLETE)
+    {
+        Log::get() << Log::WARNING << "Filter::" << __FUNCTION__ << " - Error while initializing framebuffer object: " << _status << Log::endl;
+        return;
+    }
+    else
+    {
+        Log::get() << Log::MESSAGE << "Filter::" << __FUNCTION__ << " - Framebuffer object successfully initialized" << Log::endl;
+    }
 }
 
 /*************/
@@ -153,25 +167,18 @@ void Filter::render()
         updateColorDepth();
 
     auto input = _inTextures[0].lock();
-    auto inputSpec = input->getSpec();
-
-    if (inputSpec != _outTextureSpec || (_sizeOverride[0] > 0 && _sizeOverride[1] > 0))
+    _outTextureSpec = input->getSpec();
+    if (_sizeOverride[0] > 0 && _sizeOverride[1] > 0)
     {
-        _outTextureSpec = input->getSpec();
-        if (_sizeOverride[0] > 0 || _sizeOverride[1] > 0)
-        {
-            _outTextureSpec.width = _sizeOverride[0];
-            _outTextureSpec.height = _sizeOverride[1];
-        }
-        _outTexture->resize(_outTextureSpec.width, _outTextureSpec.height);
-        glNamedFramebufferTexture(_fbo, GL_COLOR_ATTACHMENT0, _outTexture->getTexId(), 0);
-
-        GLenum fboBuffers[1] = {GL_COLOR_ATTACHMENT0};
-        glNamedFramebufferDrawBuffers(_fbo, 1, fboBuffers);
+        _outTextureSpec.width = _sizeOverride[0];
+        _outTextureSpec.height = _sizeOverride[1];
     }
+    _outTexture->resize(_outTextureSpec.width, _outTextureSpec.height);
+    glViewport(0, 0, _outTextureSpec.width, _outTextureSpec.height);
 
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, _fbo);
-    glViewport(0, 0, _outTextureSpec.width, _outTextureSpec.height);
+    GLenum fboBuffers[1] = {GL_COLOR_ATTACHMENT0};
+    glDrawBuffers(1, fboBuffers);
     glDisable(GL_DEPTH_TEST);
 
     glClearColor(0.0, 0.0, 0.0, 0.0);
@@ -253,24 +260,10 @@ void Filter::updateUniforms()
 /*************/
 void Filter::setOutput()
 {
-    glGetError();
-    glCreateFramebuffers(1, &_fbo);
-
     _outTexture = make_shared<Texture_Image>(_root);
     _outTexture->setAttribute("filtering", {1});
     _outTexture->reset(512, 512, "RGBA", nullptr);
     glNamedFramebufferTexture(_fbo, GL_COLOR_ATTACHMENT0, _outTexture->getTexId(), 0);
-
-    GLenum _status = glCheckNamedFramebufferStatus(_fbo, GL_FRAMEBUFFER);
-    if (_status != GL_FRAMEBUFFER_COMPLETE)
-    {
-        Log::get() << Log::WARNING << "Filter::" << __FUNCTION__ << " - Error while initializing framebuffer object: " << _status << Log::endl;
-        return;
-    }
-    else
-    {
-        Log::get() << Log::MESSAGE << "Filter::" << __FUNCTION__ << " - Framebuffer object successfully initialized" << Log::endl;
-    }
 
     // Setup the virtual screen
     _screen = make_shared<Object>(_root);
@@ -301,7 +294,9 @@ void Filter::updateColorDepth()
 {
     glNamedFramebufferTexture(_fbo, GL_COLOR_ATTACHMENT0, 0, 0);
     auto spec = _outTexture->getSpec();
+
     _outTexture->reset(spec.width, spec.height, _pixelFormat, nullptr);
+
     glNamedFramebufferTexture(_fbo, GL_COLOR_ATTACHMENT0, _outTexture->getTexId(), 0);
     _updateColorDepth = false;
 }

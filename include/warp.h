@@ -161,7 +161,7 @@ class Warp : public Texture
     /**
      * \brief Setup the output texture
      */
-    void setupFBO();
+    void setOutput();
 
     /**
      * \brief Register new functors to modify attributes
