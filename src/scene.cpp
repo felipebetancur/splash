@@ -431,11 +431,8 @@ void Scene::render()
             // We wait for textures to be uploaded, and we prevent any upload while rendering
             // cameras to prevent tearing
             textureLock.lock();
-            if (glIsSync(_textureUploadFence) == GL_TRUE)
-            {
-                glWaitSync(_textureUploadFence, 0, GL_TIMEOUT_IGNORED);
-                glDeleteSync(_textureUploadFence);
-            }
+            glWaitSync(_textureUploadFence, 0, GL_TIMEOUT_IGNORED);
+            glDeleteSync(_textureUploadFence);
             firstTextureSync = false;
         }
 
@@ -551,11 +548,9 @@ void Scene::textureUploadRun()
         unique_lock<Spinlock> lockTexture(_textureMutex);
 
         _textureUploadWindow->setAsCurrentContext();
-        if (glIsSync(_cameraDrawnFence) == GL_TRUE)
-        {
-            glWaitSync(_cameraDrawnFence, 0, GL_TIMEOUT_IGNORED);
-            glDeleteSync(_cameraDrawnFence);
-        }
+        glFlush();
+        glWaitSync(_cameraDrawnFence, 0, GL_TIMEOUT_IGNORED);
+        glDeleteSync(_cameraDrawnFence);
 
         Timer::get() << "textureUpload";
 
@@ -738,7 +733,7 @@ Values Scene::getObjectsNameByType(const string& type)
 /*************/
 vector<int> Scene::findGLVersion()
 {
-    vector<vector<int>> glVersionList{{4, 5}};
+    vector<vector<int>> glVersionList{{4, 3}, {4, 0}};
     vector<int> detectedVersion{0, 0};
 
     for (auto version : glVersionList)
